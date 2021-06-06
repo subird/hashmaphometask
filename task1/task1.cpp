@@ -1,20 +1,32 @@
 #include <vector>
 #include <iostream>
 #include <unordered_map>
+
 template<class KeyType, class ValueType, class Hash = std::hash<KeyType>>
 struct HashMap {
-    struct optional {
+    static const char EMPTY_ELEMENT = 1;
+    static const char NORMAL_ELEMENT = 1;
+    static const char BAD_ELEMENT = 2;
+    struct optionalAdvanced;
+    struct const_iterator;
+    struct iterator;
+    Hash hasher;
+    std::vector<optionalAdvanced> buffer;
+    int curr_size, bad_size;
+    iterator cachedBegin;
+
+    struct optionalAdvanced {
         char type;
         std::pair<KeyType, ValueType> val;
-        optional() {
-            type = 0;
+        optionalAdvanced() {
+            type = EMPTY_ELEMENT;
         }
     };
     struct iterator {
-        typename std::vector<optional>::iterator it, border;
+        typename std::vector<optionalAdvanced>::iterator it, border;
         iterator operator++() {
             ++it;
-            while (it != border && it->type != 1)
+            while (it != border && it->type != NORMAL_ELEMENT)
                 ++it;
             return *this;
         }
@@ -30,13 +42,13 @@ struct HashMap {
             return a.it != it;
         }
         std::pair<const KeyType, ValueType>& operator*(void) {
-            void* a = &((*it).val);
-            std::pair<const KeyType, ValueType> *b = (std::pair<const KeyType, ValueType>*)a;
+            void* a = &(it->val);
+            std::pair<const KeyType, ValueType> *b = reinterpret_cast<std::pair<const KeyType, ValueType>*>(a);
             return *b;
         }
         std::pair<const KeyType, ValueType>* operator->() {
             void* a = &((*it).val);
-            std::pair<const KeyType, ValueType> *b = (std::pair<const KeyType, ValueType>*)a;
+            std::pair<const KeyType, ValueType> *b = reinterpret_cast<std::pair<const KeyType, ValueType>*>(a);
             return b;
         }
     };
@@ -47,11 +59,13 @@ struct HashMap {
         bool operator!=(const const_iterator &a) const {
             return a.it != it;
         }
-        const std::pair<KeyType, ValueType>* operator->() { return &it->val; }
-        typename std::vector<optional>::const_iterator it, border;
+        const std::pair<KeyType, ValueType>* operator->() {
+            return &it->val;
+        }
+        typename std::vector<optionalAdvanced>::const_iterator it, border;
         const_iterator operator++() {
             ++it;
-            while (it != border && it->type != 1)
+            while (it != border && it->type != NORMAL_ELEMENT)
                 ++it;
             return *this;
         }
@@ -67,85 +81,80 @@ struct HashMap {
     void clear() {
         curr_size = 0;
         bad_size = 0;
-        buff = std::vector<optional>(0);
+        buffer = std::vector<optionalAdvanced>(0);
     }
-    Hash hasher;
-    std::vector<optional> buff;
-    int curr_size, bad_size;
     size_t next(size_t pos) const {
-        if (pos + 1 == buff.size())
+        if (pos + 1 == buffer.size())
             return 0;
         else
             return pos + 1;
     }
     ValueType& add(const std::pair<KeyType, ValueType> &x) {
-        size_t pos = hasher(x.first) % buff.size();
-        while (buff[pos].type == 1 && !((const KeyType)buff[pos].val.first == x.first))
+        size_t pos = hasher(x.first) % buffer.size();
+        while (buffer[pos].type == NORMAL_ELEMENT && !((const KeyType)buffer[pos].val.first == x.first))
             pos = next(pos);
-        if (buff[pos].type != 1) {
-            buff[pos].val = x;
-            buff[pos].type = 1;
+        if (buffer[pos].type != NORMAL_ELEMENT) {
+            buffer[pos].val = x;
+            buffer[pos].type = NORMAL_ELEMENT;
             ++curr_size;
-            if (buff[pos].type == 2)
+            if (buffer[pos].type == BAD_ELEMENT)
                 --bad_size;
         }
-        return buff[pos].val.second;
+        return buffer[pos].val.second;
     }
-    const size_t Inf = 1e9;
     void erase(const KeyType &x) {
-        if (!buff.size())
+        if (!buffer.size())
             return;
-        size_t pos = hasher(x) % buff.size();
-        while (buff[pos].type != 0 && !(buff[pos].type == 1 && buff[pos].val.first == x))
+        size_t pos = hasher(x) % buffer.size();
+        while (buffer[pos].type != EMPTY_ELEMENT && !(buffer[pos].type == NORMAL_ELEMENT && buffer[pos].val.first == x))
             pos = next(pos);
-        if (buff[pos].type == 0)
+        if (buffer[pos].type == EMPTY_ELEMENT)
             return;
         --curr_size;
-        buff[pos].type = 2;
+        buffer[pos].type = BAD_ELEMENT;
         ++bad_size;
+        recalcBegin();
     }
     ValueType& operator[](const KeyType &key) {
         insert({key, ValueType()});
         return find(key).it->val.second;
     }
-    iterator find(const KeyType &key) {
-        if (buff.size() == 0)
-            return {buff.end(), buff.end()};
-        size_t pos = hasher(key) % buff.size();
-        while (buff[pos].type != 0 && !(buff[pos].val.first == key && buff[pos].type == 1))
+    iterator findFast(const KeyType &key) {
+        if (buffer.size() == 0)
+            return {buffer.end(), buffer.end()};
+        size_t pos = hasher(key) % buffer.size();
+        while (buffer[pos].type != EMPTY_ELEMENT && !(buffer[pos].val.first == key && buffer[pos].type == NORMAL_ELEMENT))
             pos = next(pos);
-        if (buff[pos].type == 0)
-            return iterator{buff.end(), buff.end()};
-        return iterator{buff.begin() + pos, buff.end()};
+        if (buffer[pos].type == EMPTY_ELEMENT)
+            return iterator{buffer.end(), buffer.end()};
+        return iterator{buffer.begin() + pos, buffer.end()};
+    }
+    iterator find(const KeyType &key) {
+        return findFast(key);
     }
     const_iterator find(const KeyType &key) const {
-        if (buff.size() == 0)
-            return {buff.end(), buff.end()};
-        size_t pos = hasher(key) % buff.size();
-        while (buff[pos].type != 0 && !(buff[pos].val.first == key && buff[pos].type == 1))
-            pos = next(pos);
-        if (buff[pos].type == 0)
-            return const_iterator{buff.end(), buff.end()};
-        return const_iterator{buff.begin() + pos, buff.end()};
+        return findFast(key);
     }
-    void insert(const std::pair<KeyType, ValueType> &x) {
-        if ((curr_size + 1 + bad_size) * 2 > buff.size()){
-            std::vector<optional> pbuff = buff;
-            buff = std::vector<optional>(4 * (curr_size + 1));
+    void rehash() {
+        if ((curr_size + 1 + bad_size) * 2 > buffer.size()){
+            std::vector<optionalAdvanced> pbuffer = buffer;
+            buffer = std::vector<optionalAdvanced>(4 * (curr_size + 1));
             curr_size = 0;
             bad_size = 0;
-            for (auto &x : pbuff)
+            for (auto &x : pbuffer)
                 if (x.type == 1)
                     add(x.val);
         }
+    }
+    void insert(const std::pair<KeyType, ValueType> &x) {
+        rehash();
         if (find(x.first) == end())
             add(x);
+        recalcBegin();
     }
     HashMap() {bad_size = curr_size = 0;}
     template<class T>
     HashMap(T _hasher) : hasher(_hasher) { bad_size = curr_size = 0; }
-    //template<class T>
-    //HashMap(const HashMap<KeyType, ValueType, T> &map) { *this = map; }
     template<class T>
     HashMap(T begin, T end, Hash _hasher = Hash()) {
         bad_size = curr_size = 0;
@@ -160,13 +169,7 @@ struct HashMap {
             throw std::out_of_range("no such key");
         return find(key).it->val.second;;
     }
-    HashMap(const std::initializer_list<std::pair<KeyType, ValueType>> &lst, Hash _hasher = Hash()) {
-        curr_size = 0;
-        bad_size = 0;
-        hasher = _hasher;
-        for (auto &x : lst)
-            insert(x);
-    }
+    HashMap(const std::initializer_list<std::pair<KeyType, ValueType>> &lst, Hash _hasher = Hash()) : HashMap(lst.begin(), lst.end(), _hasher) {}
     int size() const {
         return curr_size;
     }
@@ -176,27 +179,26 @@ struct HashMap {
     Hash hash_function() const {
         return hasher;
     }
-    iterator begin() {
+    void recalcBegin() {
         int pos = 0;
-        while (pos != buff.size() && buff[pos].type != 1)
+        while (pos != buffer.size() && buffer[pos].type != 1)
             ++pos;
-        return iterator{buff.begin() + pos, buff.end()};
+        cachedBegin = iterator{buffer.begin() + pos, buffer.end()};
     }
     iterator end() {
-        return iterator{buff.end(), buff.end()};
+        return iterator{buffer.end(), buffer.end()};
+    }
+    iterator begin() {
+        return cachedBegin;
     }
     const_iterator begin() const {
-        int pos = 0;
-        while (pos != buff.size() && buff[pos].type != 1)
-            ++pos;
-        return const_iterator{buff.cbegin() + pos, buff.cend()};
+        return cachedBegin;
     }
     const_iterator end() const {
-        return const_iterator{buff.cend(), buff.cend()};
+        return const_iterator{buffer.cend(), buffer.cend()};
     }
 };
 int main() {
-#define int long long
     using namespace std;
     ios_base::sync_with_stdio(false);
     int q;
@@ -205,7 +207,6 @@ int main() {
     for (int i = 0; i < q; ++i) {
         char t;
         cin >> t;
-        //cout << t;
         if (t == '+') {
             int k, v;
             cin >> k >> v;
